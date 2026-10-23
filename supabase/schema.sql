@@ -344,6 +344,14 @@ create policy people_rep on people for select using (
   my_role() = 'rep' and exists (
     select 1 from deals d where d.person_id = people.id
       and (d.owner_id = auth.uid() or d.consultant_id = auth.uid())));
+create policy people_rep_update on people for update using (
+  my_role() = 'rep' and exists (
+    select 1 from deals d where d.person_id = people.id
+      and (d.owner_id = auth.uid() or d.consultant_id = auth.uid())));
+-- reps can add customers they find themselves, and always see/edit ones they own
+create policy people_rep_own on people for all
+  using (my_role() = 'rep' and owner_id = auth.uid())
+  with check (my_role() = 'rep' and owner_id = auth.uid());
 
 create policy leads_staff on leads for all using (my_role() in ('admin','setter'));
 

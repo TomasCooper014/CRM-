@@ -1,0 +1,9 @@
+{
+  "name": "CRM",
+  "short_name": "CRM",
+  "start_url": "./#/today",
+  "display": "standalone",
+  "background_color": "#f6f7f5",
+  "theme_color": "#14532d",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

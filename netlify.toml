@@ -1,0 +1,19 @@
+# No build step — Netlify serves the web/ folder as-is.
+[build]
+  publish = "web"
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cdn.jsdelivr.net; frame-ancestors 'none'"
+
+# Test files stay out of the published site.
+[[redirects]]
+  from = "/lib/*.test.js"
+  to = "/404"
+  status = 404
+  force = true
