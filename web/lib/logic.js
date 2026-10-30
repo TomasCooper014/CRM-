@@ -97,6 +97,46 @@ export function normalisePhone(raw) {
   return d;
 }
 
+/**
+ * Order the setter's lead inbox into call queues:
+ *  due     — call-backs whose time has come (earliest first)
+ *  fresh   — never called (newest first: speed to lead matters most)
+ *  retry   — called before, no result yet (least recently tried first)
+ *  later   — call-backs booked for later (soonest first)
+ */
+export function leadQueues(leads, now = new Date()) {
+  const q = { due: [], fresh: [], retry: [], later: [] };
+  for (const l of leads) {
+    if (l.status === 'callback') (l.next_call_at && new Date(l.next_call_at) > now ? q.later : q.due).push(l);
+    else if (l.status === 'new' || !l.attempts) q.fresh.push(l);
+    else if (l.status === 'attempting') q.retry.push(l);
+  }
+  const t = (x) => (x ? new Date(x).getTime() : 0);
+  q.due.sort((a, b) => t(a.next_call_at) - t(b.next_call_at));
+  q.fresh.sort((a, b) => t(b.created_at) - t(a.created_at));
+  q.retry.sort((a, b) => t(a.last_attempt_at) - t(b.last_attempt_at));
+  q.later.sort((a, b) => t(a.next_call_at) - t(b.next_call_at));
+  return q;
+}
+
+/** "just now", "12 min ago", "3 h ago", "2 days ago". */
+export function ago(iso, now = new Date()) {
+  if (!iso) return '';
+  const mins = Math.round((now - new Date(iso)) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} h ago`;
+  const days = Math.round(hrs / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/** Days a project has sat in its current phase. */
+export function daysInPhase(p, now = new Date()) {
+  const since = p.phase_changed_at || p.handed_over_at;
+  return since ? Math.floor((now - new Date(since)) / 86_400_000) : 0;
+}
+
 /** Map URL to a destination for Google/Apple Maps from an address. */
 export function mapsLink(address) {
   return address ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}` : null;

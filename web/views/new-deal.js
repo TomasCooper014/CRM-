@@ -1,26 +1,34 @@
 import { useState } from '../lib/deps.js';
 import { html, useLoad, Loading, ErrorBox, toast, go } from '../lib/ui.js';
-import { createDeal, team, person as loadPerson } from '../lib/db.js';
+import { createDeal, team, person as loadPerson, lead as loadLead, markLeadBooked } from '../lib/db.js';
 import { brisbaneToIso, normalisePhone, fullName, localDate } from '../lib/logic.js';
 
 const SOURCES = ['Facebook', 'Referral', 'Website', 'Response Boss', 'WHY Solar', 'Energet', 'Other'];
 
-export function NewDeal({ me, personId }) {
-  const { loading, error, data, reload } = useLoad(
-    () => Promise.all([team(), personId ? loadPerson(personId) : Promise.resolve(null)]), [personId]);
+export function NewDeal({ me, personId, leadId }) {
+  const { loading, error, data, reload } = useLoad(async () => {
+    const lead = leadId ? await loadLead(leadId) : null;
+    const pid = personId || lead?.person?.id;
+    return Promise.all([team(), pid ? loadPerson(pid) : null, lead]);
+  }, [personId, leadId]);
   if (loading && !data) return html`<${Loading} />`;
   if (error) return html`<${ErrorBox} error=${error} onRetry=${reload} />`;
-  const [people, existing] = data;
-  return html`<${Form} me=${me} reps=${people.filter((p) => p.role === 'rep' || p.role === 'admin')} existing=${existing} />`;
+  const [people, existing, lead] = data;
+  return html`<${Form} key=${leadId || personId || 'blank'} me=${me}
+    reps=${people.filter((p) => p.role === 'rep' || p.role === 'admin')} existing=${existing} lead=${lead} />`;
 }
 
-function Form({ me, reps, existing }) {
+// Lead sources in the inbox map onto the deal's Lead Source list.
+const SOURCE_FROM_LEAD = { 'WHY Solar': 'WHY Solar', Website: 'Website', Facebook: 'Facebook', Energet: 'Energet', Referral: 'Referral' };
+
+function Form({ me, reps, existing, lead }) {
   const [f, setF] = useState({
     first_name: '', last_name: '', phone: '', email: '',
-    site_address: '', site_suburb: '', site_postcode: '',
+    site_address: '', site_suburb: lead?.suburb || '', site_postcode: lead?.postcode || existing?.postcode || '',
     appt_date: localDate(), appt_time: '10:00',
     consultant_id: me.role === 'rep' ? me.id : '',
-    bill_size: existing?.bill_size || '', lead_source: '', value_aud: '', note: '',
+    bill_size: existing?.bill_size || '', lead_source: SOURCE_FROM_LEAD[lead?.source] || (lead ? 'Other' : ''),
+    value_aud: '', note: lead?.notes || '',
     home_owner: 'Own', both_owners: true,
   });
   const [busy, setBusy] = useState(false);
@@ -60,13 +68,15 @@ function Form({ me, reps, existing }) {
           note: f.note || null,
         } : null,
       });
-      toast('Deal created');
-      go('/deal/' + id);
+      if (lead) await markLeadBooked(lead.id, id);
+      toast(lead ? 'Booked — lead moved out of the inbox' : 'Deal created');
+      go(lead ? '/leads' : '/deal/' + id);
     } catch (x) { toast(x.message); setBusy(false); }
   }
 
   return html`<form class="stack" onSubmit=${save}>
     <h2>New booked appointment</h2>
+    ${lead && html`<p class="muted small">From lead: ${lead.title}</p>`}
     <fieldset class="card stack-sm">
       <legend>Customer</legend>
       ${existing ? html`<div class="title">${fullName(existing)}</div>` : html`

@@ -1,12 +1,13 @@
 -- XF / Ghost Sales CRM — Phase 1 database schema (Supabase / Postgres)
 -- Mirrors the live Pipedrive setup: Booked Appointments pipeline, custom fields,
 -- lost reasons, labels, activity types, and the installs Projects board.
+-- Flow: lead (setter) → booked deal (rep) → won → handover to installation partner (ops) → installed → commission paid.
 -- Every imported row keeps its pipedrive_id so the migration can be re-run safely.
 
 create extension if not exists "pgcrypto";
 
 -- ───────────────────────── Team ─────────────────────────
-create type user_role as enum ('admin', 'setter', 'rep', 'installs');
+create type user_role as enum ('admin', 'setter', 'rep', 'ops');
 
 create table profiles (
   id            uuid primary key references auth.users on delete cascade,
@@ -103,18 +104,31 @@ create index on people using gin (emails);
 create index on people using gin (phones);
 
 -- ───────────────────────── Leads (setter inbox, pre-deal) ─────────────────────────
+create type lead_status as enum ('new', 'attempting', 'callback', 'booked', 'dead');
+
 create table leads (
   id          uuid primary key default gen_random_uuid(),
   title       text not null,
   person_id   uuid references people on delete cascade,
   owner_id    uuid references profiles,          -- usually the setter
   source      text,                              -- Response Boss, WHY Solar, Energet, website…
+  product_interest text,                         -- Solar & Battery, Add a Battery, …
+  suburb      text,
+  postcode    text,
   notes       text,
+  status      lead_status not null default 'new',
+  attempts    int not null default 0,            -- call attempts so far
+  last_outcome text,                             -- e.g. 'No answer', 'Call back', 'Not interested'
+  last_attempt_at timestamptz,
+  next_call_at timestamptz,                      -- when status = 'callback'
+  dead_reason text,
   archived    boolean not null default false,
   converted_deal_id uuid,
   pipedrive_id text unique,                      -- Pipedrive lead ids are UUIDs
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
 );
+create index on leads (status, next_call_at) where not archived;
 
 -- ───────────────────────── Deals ─────────────────────────
 create type deal_status as enum ('open','won','lost');
@@ -212,7 +226,20 @@ create table notes (
   created_at timestamptz not null default now()
 );
 
--- ───────────────────────── Projects (installs board) ─────────────────────────
+-- ───────────────────────── Installation partners (retailers / installers) ─────────────────────────
+create table install_partners (
+  id           uuid primary key default gen_random_uuid(),
+  name         text not null unique,
+  contact_name text,
+  phone        text,
+  email        text,
+  regions      text,                     -- e.g. 'Brisbane North, Sunshine Coast'
+  notes        text,
+  active       boolean not null default true,
+  created_at   timestamptz not null default now()
+);
+
+-- ───────────────────────── Projects (handover → install board) ─────────────────────────
 create table project_boards (
   id    serial primary key,
   name  text not null,
@@ -223,8 +250,19 @@ create table project_phases (
   board_id  int not null references project_boards on delete cascade,
   name      text not null,
   sort_order int not null,
+  is_final  boolean not null default false,   -- moving here completes the project
   pipedrive_id bigint unique
 );
+-- Default board. Phase names can be changed later to match how the team works.
+insert into project_boards (name) values ('Installations');
+insert into project_phases (board_id, name, sort_order, is_final) values
+  (1, 'Ready for handover', 1, false),
+  (1, 'With partner',       2, false),
+  (1, 'Site inspection',    3, false),
+  (1, 'Finance / deposit',  4, false),
+  (1, 'Install booked',     5, false),
+  (1, 'Installed',          6, false),
+  (1, 'Commission paid',    7, true);
 
 create table projects (
   id           uuid primary key default gen_random_uuid(),
@@ -238,16 +276,28 @@ create table projects (
   status       text not null default 'open' check (status in ('open','completed','canceled')),
   health       text check (health in ('On track','At risk','Off track','On hold')),
   label_ids    int[] not null default '{}',
+  -- handover
+  partner_id   uuid references install_partners,
+  partner_job_ref text,                   -- the partner's own job number
+  handed_over_at timestamptz,
+  finance_provider text,                  -- Brighte, Plenti, Cash, …
+  sale_price_aud  numeric(12,2),
+  commission_aud  numeric(12,2),
+  commission_paid_on date,
+  -- install
   scheduled_install_date date,
   install_completed_date date,
   assigned_installer text,
   installation_notes text,
   start_date   date,
   end_date     date,
+  phase_changed_at timestamptz,
   pipedrive_id bigint unique,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+create unique index projects_one_per_deal on projects (deal_id) where deal_id is not null and status <> 'canceled';
+create index on projects (phase_id) where status = 'open';
 alter table activities add constraint activities_project_fk
   foreign key (project_id) references projects on delete cascade;
 alter table notes add constraint notes_project_fk
@@ -314,9 +364,39 @@ begin
   return new;
 end $$;
 create trigger t_deal_stage before update on deals for each row execute function deal_stage_changed();
+create trigger t_leads before update on leads for each row execute function touch_updated_at();
+
+-- Projects: stamp phase changes; reaching the final phase completes the project.
+create or replace function project_phase_changed() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' or new.phase_id is distinct from old.phase_id then
+    new.phase_changed_at := now();
+    if exists (select 1 from project_phases where id = new.phase_id and is_final) then
+      new.status := 'completed';
+    elsif new.status = 'completed' then
+      new.status := 'open';
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger t_project_phase before insert or update on projects for each row execute function project_phase_changed();
+
+-- Logging a call on a lead bumps its attempt count and outcome.
+create or replace function lead_call_logged() returns trigger language plpgsql as $$
+begin
+  if new.lead_id is not null and new.type = 'call' and new.done then
+    update leads set attempts = attempts + 1,
+                     last_attempt_at = coalesce(new.done_at, now()),
+                     last_outcome = coalesce(new.outcome::text, last_outcome),
+                     status = case when status = 'new' then 'attempting' else status end
+     where id = new.lead_id;
+  end if;
+  return new;
+end $$;
+create trigger t_lead_call after insert on activities for each row execute function lead_call_logged();
 
 -- ───────────────────────── Access rules (RLS) ─────────────────────────
--- admin & setter: everything. rep: own/consulting deals + linked records. installs: projects.
+-- admin & setter: everything. rep: own/consulting deals + linked records. ops: won deals, handover, installs board.
 create or replace function my_role() returns user_role language sql stable security definer as $$
   select role from profiles where id = auth.uid() and active
 $$;
@@ -337,9 +417,10 @@ create policy profiles_admin on profiles for all using (my_role() = 'admin');
 create policy deals_staff on deals for all using (my_role() in ('admin','setter'));
 create policy deals_rep on deals for all
   using (my_role() = 'rep' and (owner_id = auth.uid() or consultant_id = auth.uid()));
-create policy deals_installs_read on deals for select using (my_role() = 'installs');
+create policy deals_ops_read on deals for select using (my_role() = 'ops');
+create policy deals_ops_update on deals for update using (my_role() = 'ops');
 
-create policy people_staff on people for all using (my_role() in ('admin','setter','installs'));
+create policy people_staff on people for all using (my_role() in ('admin','setter','ops'));
 create policy people_rep on people for select using (
   my_role() = 'rep' and exists (
     select 1 from deals d where d.person_id = people.id
@@ -355,6 +436,10 @@ create policy people_rep_own on people for all
 
 create policy leads_staff on leads for all using (my_role() in ('admin','setter'));
 
+alter table install_partners enable row level security;
+create policy partners_read   on install_partners for select using (my_role() is not null);
+create policy partners_manage on install_partners for all    using (my_role() in ('admin','ops'));
+
 create policy acts_staff on activities for all using (my_role() in ('admin','setter'));
 create policy acts_own on activities for all using (owner_id = auth.uid());
 create policy acts_rep_deal on activities for select using (
@@ -367,9 +452,10 @@ create policy notes_rep on notes for all using (
   my_role() = 'rep' and exists (
     select 1 from deals d where d.id = notes.deal_id
       and (d.owner_id = auth.uid() or d.consultant_id = auth.uid())));
-create policy notes_installs on notes for all using (my_role() = 'installs' and project_id is not null);
+create policy notes_ops on notes for all using (my_role() = 'ops');
+create policy acts_ops on activities for all using (my_role() = 'ops' and project_id is not null);
 
-create policy projects_team on projects for all using (my_role() in ('admin','installs'));
+create policy projects_team on projects for all using (my_role() in ('admin','ops'));
 create policy projects_rep_read on projects for select using (
   my_role() = 'rep' and exists (
     select 1 from deals d where d.id = projects.deal_id

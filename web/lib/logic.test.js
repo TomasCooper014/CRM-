@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   localDate, addDays, bucketActivities, groupByStage, isRotten, fullName,
-  brisbaneToIso, normalisePhone, dayLabel, timeOnly,
+  brisbaneToIso, normalisePhone, dayLabel, timeOnly, leadQueues, ago, daysInPhase,
 } from './logic.js';
 
 // 21:51 Fri 23 Oct in Brisbane = 11:51 UTC
@@ -67,6 +67,29 @@ test('timeOnly shows Brisbane time', () => {
 test('normalisePhone handles +61 and spacing', () => {
   assert.equal(normalisePhone('+61 412 345 678'), '0412345678');
   assert.equal(normalisePhone('0412 345 678'), '0412345678');
+});
+
+test('leadQueues orders the call list', () => {
+  const leads = [
+    { id: 'old-new', status: 'new', attempts: 0, created_at: '2026-10-23T01:00:00Z' },
+    { id: 'new-new', status: 'new', attempts: 0, created_at: '2026-10-23T11:00:00Z' },
+    { id: 'cb-due', status: 'callback', attempts: 1, next_call_at: '2026-10-23T11:00:00Z' },
+    { id: 'cb-later', status: 'callback', attempts: 1, next_call_at: '2026-10-24T00:00:00Z' },
+    { id: 'tried-long-ago', status: 'attempting', attempts: 2, last_attempt_at: '2026-10-21T00:00:00Z' },
+    { id: 'tried-recently', status: 'attempting', attempts: 1, last_attempt_at: '2026-10-23T10:00:00Z' },
+    { id: 'booked', status: 'booked', attempts: 3 },
+  ];
+  const q = leadQueues(leads, NOW);
+  assert.deepEqual(q.due.map((l) => l.id), ['cb-due']);
+  assert.deepEqual(q.fresh.map((l) => l.id), ['new-new', 'old-new']);
+  assert.deepEqual(q.retry.map((l) => l.id), ['tried-long-ago', 'tried-recently']);
+  assert.deepEqual(q.later.map((l) => l.id), ['cb-later']);
+});
+
+test('ago and daysInPhase', () => {
+  assert.equal(ago('2026-10-23T11:39:00Z', NOW), '12 min ago');
+  assert.equal(ago('2026-10-21T11:51:00Z', NOW), '2 days ago');
+  assert.equal(daysInPhase({ phase_changed_at: '2026-10-20T11:00:00Z' }, NOW), 3);
 });
 
 test('fullName and dayLabel', () => {

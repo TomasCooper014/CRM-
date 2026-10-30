@@ -168,3 +168,14 @@ button.tag.picked { opacity: 1; outline: 2px solid currentColor; }
   max-width: calc(100% - 32px);
 }
 #toast.show { opacity: 1; transform: translateX(-50%); }
+
+/* lead inbox */
+button.plain {
+  all: unset; display: block; width: 100%; cursor: pointer; text-align: left;
+}
+button.plain:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+.lead .title { font-weight: 600; }
+
+/* installs board: one column per phase */
+.board.wide { grid-template-columns: repeat(7, minmax(210px, 1fr)); }
+@media (max-width: 820px) { .board.wide { grid-template-columns: repeat(7, 85%); } }

@@ -48,6 +48,8 @@ export function DealPage({ id, me }) {
       </div>
     </div>
 
+    ${d.status === 'won' && html`<${InstallCard} d=${d} me=${me} />`}
+
     ${panel === 'lost' && html`<${LostForm} reasons=${lk.lostReasons} onCancel=${() => setPanel(null)}
       onSave=${(reasonId, note) => patch({ status: 'lost', lost_reason_id: reasonId, lost_note: note || null }, 'Marked lost')} />`}
 
@@ -86,6 +88,21 @@ export function DealPage({ id, me }) {
 
     <${Notes} d=${d} onAdded=${reload} />
   `;
+}
+
+function InstallCard({ d, me }) {
+  const job = d.projects?.find((p) => p.status !== 'canceled');
+  const canHandOver = me.role === 'admin' || me.role === 'ops';
+  return html`<div class="card stack-sm">
+    <h3>Installation</h3>
+    ${job ? html`
+      <div>With <strong>${job.partner?.name || 'partner not set'}</strong>${job.status === 'completed' ? ' — complete' : ''}
+        ${job.scheduled_install_date ? html`<span class="muted"> · install ${job.scheduled_install_date}</span>` : ''}</div>
+      ${canHandOver && html`<a href=${'#/project/' + job.id}>Open the job ›</a>`}`
+    : canHandOver
+      ? html`<p class="muted">Not handed to a partner yet.</p><a class="button primary" href=${'#/handover/' + d.id}>Hand over to partner</a>`
+      : html`<p class="muted">Waiting for operations to hand this to an installation partner.</p>`}
+  </div>`;
 }
 
 function LostForm({ reasons, onSave, onCancel }) {

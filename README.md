@@ -1,23 +1,22 @@
-# CRM
+# CRM / Portal
 
-In-house CRM replacing Pipedrive for the solar sales team.
+The business's own CRM and team portal: lead → booked appointment → sale → handover to an installation partner → installed → commission paid. Used by appointment setters, sales reps and the operations team.
 
-Stack: Supabase (Postgres, auth, storage) + Netlify (web app, installable on phones).
+Stack: Supabase (Postgres, auth, storage) + Netlify (web app, installable on phones). The code and both accounts belong to the business.
 
-## Build phases
+## Screens
 
-1. **Core CRM** — Booked Appointments pipeline, contacts, site appointments, follow-ups, notes, lost reasons, per-person logins (reps see only their own deals).
-2. **Calendar & Projects** — per-person calendar feed (appointments with full address, so phone "Time to Leave" alerts work); installs Projects board.
-3. **Email & SMS** — Gmail sync (Google Workspace, Internal app), BCC logging address, post-appointment and follow-up texts via Mobile Message with opt-out.
-4. **Switchover** — import from Pipedrive (every row keeps its `pipedrive_id`, so the import can be re-run), repoint Zapier lead feeds, run both side by side 2–3 weeks, then cancel Pipedrive.
-
-## What's built (Phase 1)
-
-- **Today** — your overdue, today and next-7-days activities; tick to mark done; one-tap call and directions. Admin and setter can switch to "Everyone".
-- **Pipeline** — Confirmed Appointments → Follow Up → Sold - Awaiting Finance, with totals per column, labels, and a red edge on deals that have sat too long in a stage. Move deals with the arrow buttons.
-- **Deal page** — call / text / directions, stage, won or lost (with reason), details and labels, activities, notes.
-- **New** — book an appointment: customer, site, date and time (QLD), consultant, setter notes. Creates the contact, the deal and the rep's site appointment in one go.
-- **Contacts** — search by name, phone or email; edit details and text/email opt-outs.
+| Screen | Who | What it does |
+|---|---|---|
+| **Leads** | setter, admin | Call queue: call-backs due now, new leads (newest first), retries (longest waiting first), booked call-backs. Log No answer / Voicemail / Call back / Not interested, or **Book appointment**. |
+| **Book** | setter, rep | Book an appointment: customer, site, date/time (QLD), consultant, notes. From a lead it pre-fills and moves the lead out of the inbox. |
+| **Today** | everyone | Overdue, today and next-7-days activities; tick to complete; one-tap call and directions. |
+| **Pipeline** | setter, rep, admin | Confirmed Appointments → Follow Up → Sold - Awaiting Finance, with totals and a red edge on deals sitting too long. |
+| **Deal** | everyone (reps: own only) | Call / text / directions, stage, won or lost (with reason), details, labels, activities, notes, and installation status once won. |
+| **Installs** | ops, admin | Won jobs waiting for handover, then a board per phase: With partner → Site inspection → Finance / deposit → Install booked → Installed → Commission paid. Flags jobs stuck 14+ days and shows unpaid commission. |
+| **Handover / Job** | ops, admin | Pick the partner, sale price, commission, finance provider, partner's job number, handover notes; then track install dates and mark commission paid. |
+| **Partners** | ops, admin edit; everyone reads | Installation partners and the regions they cover. |
+| **Contacts** | everyone (reps: own customers only) | Search by name, phone or email; edit details and text/email opt-outs. |
 
 The app has no build step: `web/` is plain JavaScript served as-is. Libraries (Preact, htm, supabase-js) load from jsDelivr at pinned versions.
 
@@ -31,7 +30,7 @@ The app has no build step: `web/` is plain JavaScript served as-is. Libraries (P
 
    ```sql
    insert into profiles (id, full_name, email, role)
-   select id, 'Full Name', email, 'rep'          -- admin | setter | rep | installs
+   select id, 'Full Name', email, 'rep'          -- admin | setter | rep | ops
    from auth.users where email = 'person@example.com';
    ```
 
@@ -40,19 +39,25 @@ The app has no build step: `web/` is plain JavaScript served as-is. Libraries (P
 ## Checks
 
 ```
-node --test web/lib/logic.test.js     # business logic (dates, buckets, pipeline)
+sh supabase/tests/run.sh              # lead → booked → won → handover → commission paid, per role, on a real Postgres
+node --test web/lib/logic.test.js     # business logic (dates, call queues, pipeline)
 node web/check-templates.mjs          # every screen template has balanced tags
 ```
 
-## Database
+## Access rules
 
-`supabase/schema.sql` — run once in the Supabase SQL editor on a new project.
+Row-level security is on for every table, so these limits hold even if someone calls the database directly:
 
-Access rules (row-level security) are on for every table:
-
-| Role | Can see |
+| Role | Can see and change |
 |---|---|
 | admin | everything |
-| setter | all leads, deals, contacts, activities |
-| rep | only deals they own or are the consultant on, and those customers |
-| installs | projects board, plus read access to deals and contacts |
+| setter | lead inbox, all deals, contacts and activities; not the installs board |
+| rep | only deals they own or are the consultant on, those customers, and the install status of their own sales (read-only) |
+| ops | won deals, the handover queue, installs board, partners, all contacts and notes; not the lead inbox |
+
+## Build phases
+
+1. **Core CRM + portal flow** — done: leads, booking, pipeline, deals, contacts, handover, installs board, partners.
+2. **Calendar** — per-person calendar feed (appointments with full address, so phone "Time to Leave" alerts work).
+3. **Email & SMS** — Gmail sync (Google Workspace, Internal app), BCC logging address, post-appointment and follow-up texts via Mobile Message with opt-out.
+4. **Data import & switchover** — import from Pipedrive and the old portal export (imported rows keep their source id, so imports can be re-run), repoint the WHY Solar / website / Zapier lead feeds, run side by side, then switch off the old systems.

@@ -7,9 +7,23 @@ import { Pipeline } from './views/pipeline.js';
 import { DealPage } from './views/deal.js';
 import { Contacts, ContactPage } from './views/contacts.js';
 import { NewDeal } from './views/new-deal.js';
+import { Leads } from './views/leads.js';
+import { Installs, Handover, ProjectPage, Partners } from './views/installs.js';
+
+// Bottom tabs per role; the first tab is that role's home screen.
+const T = {
+  leads: ['leads', 'Leads', '☎︎'], today: ['today', 'Today', '☀︎'], pipeline: ['pipeline', 'Pipeline', '▤'],
+  new: ['new', 'Book', '+'], installs: ['installs', 'Installs', '⚙︎'], contacts: ['contacts', 'Contacts', '☺︎'],
+};
+const TABS = {
+  setter: [T.leads, T.today, T.new, T.pipeline, T.contacts],
+  rep: [T.today, T.pipeline, T.new, T.contacts],
+  ops: [T.installs, T.today, T.contacts],
+  admin: [T.today, T.leads, T.pipeline, T.installs, T.contacts],
+};
 
 function readRoute() {
-  const [path, qs = ''] = (location.hash.replace(/^#/, '') || '/today').split('?');
+  const [path, qs = ''] = (location.hash.replace(/^#/, '') || '/').split('?');
   return { parts: path.split('/').filter(Boolean), query: Object.fromEntries(new URLSearchParams(qs)) };
 }
 function useRoute() {
@@ -46,7 +60,7 @@ function App() {
 
   if (session === undefined) return html`<${Loading} />`;
   if (!session) return html`<${Login} />`;
-  if (recovering) return html`<${SetPassword} onDone=${() => { setRecovering(false); location.hash = '/today'; }} />`;
+  if (recovering) return html`<${SetPassword} onDone=${() => { setRecovering(false); location.hash = '/'; }} />`;
   if (profile === undefined) return html`<${Loading} />`;
   if (!profile || !profile.active) {
     return html`<main class="login"><div class="card stack">
@@ -56,19 +70,32 @@ function App() {
     </div></main>`;
   }
 
-  const [page, id] = route.parts;
-  const seeAll = profile.role === 'admin' || profile.role === 'setter';
+  const role = profile.role;
+  const seeAll = role === 'admin' || role === 'setter';
+  const isOps = role === 'admin' || role === 'ops';
+  const isSetter = role === 'admin' || role === 'setter';
+  const home = TABS[role][0][0];
+  const page = route.parts[0] || home;
+  const id = route.parts[1];
   let body;
   switch (page) {
+    case 'leads': body = isSetter ? html`<${Leads} />` : null; break;
     case 'pipeline': body = html`<${Pipeline} me=${profile} seeAll=${seeAll} />`; break;
     case 'deal': body = html`<${DealPage} id=${id} me=${profile} />`; break;
     case 'contacts': body = html`<${Contacts} />`; break;
     case 'contact': body = html`<${ContactPage} id=${id} />`; break;
-    case 'new': body = html`<${NewDeal} me=${profile} personId=${route.query.person} />`; break;
-    default: body = html`<${Today} me=${profile} seeAll=${seeAll} />`;
+    case 'new': body = role === 'ops' ? null
+      : html`<${NewDeal} me=${profile} personId=${route.query.person} leadId=${route.query.lead} />`; break;
+    case 'installs': body = isOps ? html`<${Installs} />` : null; break;
+    case 'handover': body = isOps ? html`<${Handover} dealId=${id} />` : null; break;
+    case 'project': body = isOps ? html`<${ProjectPage} id=${id} />` : null; break;
+    case 'partners': body = html`<${Partners} canEdit=${isOps} />`; break;
+    case 'today': body = html`<${Today} me=${profile} seeAll=${seeAll} />`; break;
+    default: body = null;
   }
+  if (!body) body = html`<p class="pad muted">That page isn't available. <a href=${'#/' + home}>Go to ${home}</a></p>`;
 
-  const tab = (path, label, icon) => html`<a href=${'#/' + path} class=${page === path || (!page && path === 'today') ? 'on' : ''}>
+  const tab = ([path, label, icon]) => html`<a href=${'#/' + path} class=${page === path ? 'on' : ''}>
     <span aria-hidden="true">${icon}</span>${label}</a>`;
 
   return html`
@@ -77,11 +104,8 @@ function App() {
       <button class="link" onClick=${signOut}>Sign out</button>
     </header>
     <main class="page">${body}</main>
-    <nav class="tabs">
-      ${tab('today', 'Today', '☀︎')}
-      ${tab('pipeline', 'Pipeline', '▤')}
-      ${tab('new', 'New', '+')}
-      ${tab('contacts', 'Contacts', '☺︎')}
+    <nav class="tabs" style=${`grid-template-columns: repeat(${TABS[role].length}, 1fr)`}>
+      ${TABS[role].map(tab)}
     </nav>
     <div id="toast" role="status" aria-live="polite"></div>`;
 }
